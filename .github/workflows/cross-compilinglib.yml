@@ -1,4 +1,4 @@
-name: Build double-conversion, FreeType, LibXml2, LibZip for Android
+name: Build HarfBuzz + Cairo + lib3mf for Android NDK
 
 on:
   workflow_dispatch:
@@ -6,11 +6,12 @@ on:
 env:
   API_LEVEL: 24
   NDK_URL: https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip
-  NDK_DIR: /opt/android-ndk
-  DC_VERSION: 3.3.0
+  HARFBUZZ_VERSION: 9.0.0
+  PIXMAN_VERSION: 0.43.4
+  CAIRO_VERSION: 1.18.2
+  EXPAT_VERSION: 2.6.4
+  LIB3MF_VERSION: 2.3.2
   FREETYPE_VERSION: 2.13.3
-  LIBXML2_VERSION: 2.13.5
-  LIBXML2_VERSION_DIR: 2.13
   LIBZIP_VERSION: 1.11.2
 
 jobs:
@@ -36,129 +37,144 @@ jobs:
           unzip -q ndk.zip -d /opt/
           mv /opt/android-ndk-r30-beta2 /opt/android-ndk
 
-      - name: Install cmake/ninja
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build meson pkg-config python3-pip
 
-      - name: Cache source archives
-        id: source-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            dc.tar.gz
-            freetype.tar.xz
-            libxml2.tar.xz
-            libzip.tar.xz
-          key: source-archives-${{ env.DC_VERSION }}-${{ env.FREETYPE_VERSION }}-${{ env.LIBXML2_VERSION }}-${{ env.LIBZIP_VERSION }}
-
-      - name: Set common CMake args
+      - name: Set common env
         run: |
-          echo "TOOLCHAIN_FILE=${{ env.NDK_DIR }}/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+          echo "TOOLCHAIN_FILE=/opt/android-ndk/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
           echo "INSTALL_PREFIX=/tmp/install-${{ matrix.abi }}" >> $GITHUB_ENV
-          echo "ANDROID_PLATFORM=android-${{ env.API_LEVEL }}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/tmp/install-${{ matrix.abi }}/lib/pkgconfig" >> $GITHUB_ENV
+          mkdir -p /tmp/install-${{ matrix.abi }}/lib/pkgconfig
 
-      # ---------- double-conversion ----------
-      - name: Build double-conversion
-        run: |
-          rm -rf build-dc double-conversion-${{ env.DC_VERSION }}
-          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f dc.tar.gz ]; then
-            wget -q https://github.com/google/double-conversion/archive/refs/tags/v${{ env.DC_VERSION }}.tar.gz -O dc.tar.gz
-          fi
-          tar xzf dc.tar.gz
-          cmake -S double-conversion-${{ env.DC_VERSION }} -B build-dc -GNinja \
-            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
-            -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF
-          cmake --build build-dc -j$(nproc)
-          cmake --install build-dc
-
-      # ---------- FreeType ----------
+      # ---------- FreeType (dependency for HarfBuzz + Cairo) ----------
       - name: Build FreeType
         run: |
-          rm -rf build-ft freetype-${{ env.FREETYPE_VERSION }}
-          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f freetype-${{ env.FREETYPE_VERSION }}.tar.xz ]; then
-            wget -q https://download.savannah.gnu.org/releases/freetype/freetype-${{ env.FREETYPE_VERSION }}.tar.xz
-          fi
+          wget -q https://download.savannah.gnu.org/releases/freetype/freetype-${{ env.FREETYPE_VERSION }}.tar.xz
           tar xf freetype-${{ env.FREETYPE_VERSION }}.tar.xz
           cmake -S freetype-${{ env.FREETYPE_VERSION }} -B build-ft -GNinja \
             -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
-            -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DFT_DISABLE_HARFBUZZ=TRUE \
-            -DFT_DISABLE_PNG=TRUE \
-            -DFT_DISABLE_BZIP2=TRUE \
-            -DFT_DISABLE_BROTLI=TRUE
-          cmake --build build-ft -j$(nproc)
-          cmake --install build-ft
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-${{ env.API_LEVEL }} \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_PNG=TRUE \
+            -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_BROTLI=TRUE
+          cmake --build build-ft -j$(nproc) && cmake --install build-ft
 
-      # ---------- LibXml2 ----------
-      - name: Build LibXml2
-        run: |
-          rm -rf build-xml2 libxml2-${{ env.LIBXML2_VERSION }}
-          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f libxml2-${{ env.LIBXML2_VERSION }}.tar.xz ]; then
-            wget -q https://download.gnome.org/sources/libxml2/${{ env.LIBXML2_VERSION_DIR }}/libxml2-${{ env.LIBXML2_VERSION }}.tar.xz
-          fi
-          tar xf libxml2-${{ env.LIBXML2_VERSION }}.tar.xz
-          cmake -S libxml2-${{ env.LIBXML2_VERSION }} -B build-xml2 -GNinja \
-            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
-            -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DLIBXML2_WITH_PYTHON=OFF \
-            -DLIBXML2_WITH_ICONV=OFF \
-            -DLIBXML2_WITH_LZMA=OFF \
-            -DLIBXML2_WITH_ICU=OFF \
-            -DLIBXML2_WITH_TESTS=OFF
-          cmake --build build-xml2 -j$(nproc)
-          cmake --install build-xml2
-
-      # ---------- LibZip ----------
+      # ---------- LibZip (dependency for lib3mf) ----------
       - name: Build LibZip
         run: |
-          rm -rf build-zip libzip-${{ env.LIBZIP_VERSION }}
-          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f libzip-${{ env.LIBZIP_VERSION }}.tar.xz ]; then
-            wget -q https://libzip.org/download/libzip-${{ env.LIBZIP_VERSION }}.tar.xz
-          fi
+          wget -q https://libzip.org/download/libzip-${{ env.LIBZIP_VERSION }}.tar.xz
           tar xf libzip-${{ env.LIBZIP_VERSION }}.tar.xz
           cmake -S libzip-${{ env.LIBZIP_VERSION }} -B build-zip -GNinja \
             -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
-            -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_COMMONCRYPTO=OFF \
-            -DENABLE_GNUTLS=OFF \
-            -DENABLE_MBEDTLS=OFF \
-            -DENABLE_OPENSSL=OFF \
-            -DENABLE_BZIP2=OFF \
-            -DBUILD_TOOLS=OFF \
-            -DBUILD_REGRESS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_DOC=OFF
-          cmake --build build-zip -j$(nproc)
-          cmake --install build-zip
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-${{ env.API_LEVEL }} \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF \
+            -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF \
+            -DBUILD_TOOLS=OFF -DBUILD_REGRESS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOC=OFF
+          cmake --build build-zip -j$(nproc) && cmake --install build-zip
+
+      # ---------- HarfBuzz ----------
+      - name: Build HarfBuzz
+        run: |
+          wget -q https://github.com/harfbuzz/harfbuzz/releases/download/${{ env.HARFBUZZ_VERSION }}/harfbuzz-${{ env.HARFBUZZ_VERSION }}.tar.xz
+          tar xf harfbuzz-${{ env.HARFBUZZ_VERSION }}.tar.xz
+          cmake -S harfbuzz-${{ env.HARFBUZZ_VERSION }} -B build-hb -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-${{ env.API_LEVEL }} \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF -DHB_HAVE_FREETYPE=ON -DHB_HAVE_GLIB=OFF \
+            -DHB_HAVE_ICU=OFF -DHB_HAVE_GOBJECT=OFF -DHB_BUILD_TESTS=OFF \
+            -DFREETYPE_LIBRARY=$INSTALL_PREFIX/lib/libfreetype.a \
+            -DFREETYPE_INCLUDE_DIRS=$INSTALL_PREFIX/include/freetype2
+          cmake --build build-hb -j$(nproc) && cmake --install build-hb
+
+      # ---------- Pixman (Cairo dependency, Meson build) ----------
+      - name: Write Meson cross file
+        run: |
+          TOOLCHAIN=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64
+          case "${{ matrix.abi }}" in
+            arm64-v8a)   TRIPLE=aarch64-linux-android ;;
+            armeabi-v7a) TRIPLE=armv7a-linux-androideabi ;;
+          esac
+          cat > cross-android.txt <<EOF
+          [binaries]
+          c = '$TOOLCHAIN/bin/${TRIPLE}${{ env.API_LEVEL }}-clang'
+          cpp = '$TOOLCHAIN/bin/${TRIPLE}${{ env.API_LEVEL }}-clang++'
+          ar = '$TOOLCHAIN/bin/llvm-ar'
+          strip = '$TOOLCHAIN/bin/llvm-strip'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = '$([[ "${{ matrix.abi }}" == "arm64-v8a" ]] && echo aarch64 || echo arm)'
+          cpu = '$([[ "${{ matrix.abi }}" == "arm64-v8a" ]] && echo aarch64 || echo armv7)'
+          endian = 'little'
+          EOF
+
+      - name: Build Pixman
+        run: |
+          wget -q https://www.cairographics.org/releases/pixman-${{ env.PIXMAN_VERSION }}.tar.gz
+          tar xzf pixman-${{ env.PIXMAN_VERSION }}.tar.gz
+          meson setup build-pixman pixman-${{ env.PIXMAN_VERSION }} \
+            --cross-file cross-android.txt \
+            --prefix=$INSTALL_PREFIX --libdir=lib \
+            --default-library=static -Dtests=disabled
+          meson compile -C build-pixman
+          meson install -C build-pixman
+
+      # ---------- Cairo (uses your fontconfig stub — must be on include path) ----------
+      - name: Build Cairo
+        run: |
+          wget -q https://www.cairographics.org/releases/cairo-${{ env.CAIRO_VERSION }}.tar.xz
+          tar xf cairo-${{ env.CAIRO_VERSION }}.tar.xz
+          meson setup build-cairo cairo-${{ env.CAIRO_VERSION }} \
+            --cross-file cross-android.txt \
+            --prefix=$INSTALL_PREFIX --libdir=lib \
+            --default-library=static \
+            -Dfontconfig=disabled -Dfreetype=enabled -Dzlib=enabled \
+            -Dxlib=disabled -Dxcb=disabled -Dtests=disabled -Dpng=disabled
+          meson compile -C build-cairo
+          meson install -C build-cairo
+
+      # ---------- Expat (lib3mf dependency) ----------
+      - name: Build Expat
+        run: |
+          wget -q https://github.com/libexpat/libexpat/releases/download/R_${EXPAT_TAG//./_}/expat-${{ env.EXPAT_VERSION }}.tar.xz
+          tar xf expat-${{ env.EXPAT_VERSION }}.tar.xz
+          cmake -S expat-${{ env.EXPAT_VERSION }} -B build-expat -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-${{ env.API_LEVEL }} \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_EXAMPLES=OFF \
+            -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_SHARED_LIBS=OFF
+          cmake --build build-expat -j$(nproc) && cmake --install build-expat
+        env:
+          EXPAT_TAG: ${{ env.EXPAT_VERSION }}
+
+      # ---------- lib3mf ----------
+      - name: Build lib3mf
+        run: |
+          git clone --branch v${{ env.LIB3MF_VERSION }} --depth 1 https://github.com/3MFConsortium/lib3mf.git
+          cmake -S lib3mf -B build-3mf -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-${{ env.API_LEVEL }} \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DCMAKE_PREFIX_PATH=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF -DUSE_INCLUDED_ZLIB=OFF -DUSE_INCLUDED_LIBZIP=OFF \
+            -DUSE_INCLUDED_EXPAT=OFF -DLIB3MF_TESTS=OFF
+          cmake --build build-3mf -j$(nproc) && cmake --install build-3mf
 
       - name: Sanity check outputs
-        run: |
-          echo "Installed libs:"
-          find $INSTALL_PREFIX/lib -name "*.a"
+        run: find $INSTALL_PREFIX/lib -name "*.a" | sort
 
       - name: Package artifact
         run: |
           cd $INSTALL_PREFIX
-          tar czf android-libs-${{ matrix.abi }}.tar.gz *
+          tar czf hb-cairo-3mf-${{ matrix.abi }}.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-libs-${{ matrix.abi }}
-          path: /tmp/install-${{ matrix.abi }}/android-libs-${{ matrix.abi }}.tar.gz
+          name: hb-cairo-3mf-android-${{ matrix.abi }}
+          path: /tmp/install-${{ matrix.abi }}/hb-cairo-3mf-${{ matrix.abi }}.tar.gz
