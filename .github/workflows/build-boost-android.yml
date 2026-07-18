@@ -1,0 +1,124 @@
+name: Build Boost for Android NDK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-boost-android.yml'
+
+env:
+  BOOST_VERSION: 1.86.0
+  BOOST_VERSION_UNDERSCORE: 1_86_0
+  API_LEVEL: 24
+  NDK_URL: https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip
+  NDK_DIR: /opt/android-ndk
+  BOOST_SRC_DIR: boost_${{ env.BOOST_VERSION_UNDERSCORE }}
+
+jobs:
+  build-boost-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            clang_triple: aarch64-linux-android
+            boost_arch: arm
+            boost_address_model: 64
+          - abi: armeabi-v7a
+            clang_triple: armv7a-linux-androideabi
+            boost_arch: arm
+            boost_address_model: 32
+          - abi: x86_64
+            clang_triple: x86_64-linux-android
+            boost_arch: x86
+            boost_address_model: 64
+
+    steps:
+      - name: Cache NDK download
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: ndk-r30-beta2-linux
+
+      - name: Download and extract NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf "${{ env.NDK_DIR }}" /opt/android-ndk-r30-beta2
+          wget -q "${{ env.NDK_URL }}" -O ndk.zip
+          unzip -q ndk.zip -d /opt/
+          mv /opt/android-ndk-r30-beta2 "${{ env.NDK_DIR }}"
+
+      - name: Export toolchain env vars
+        run: |
+          TOOLCHAIN=${{ env.NDK_DIR }}/toolchains/llvm/prebuilt/linux-x86_64
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "CC=$TOOLCHAIN/bin/${{ matrix.clang_triple }}${{ env.API_LEVEL }}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/${{ matrix.clang_triple }}${{ env.API_LEVEL }}-clang++" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "BOOST_SRC_DIR=${{ env.BOOST_SRC_DIR }}" >> $GITHUB_ENV
+
+      - name: Cache Boost source
+        id: boost-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BOOST_SRC_DIR }}
+            boost.tar.gz
+          key: boost-source-${{ env.BOOST_VERSION_UNDERSCORE }}
+
+      - name: Download Boost source
+        if: steps.boost-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf "${{ env.BOOST_SRC_DIR }}" boost.tar.gz
+          wget -q https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${{ env.BOOST_VERSION_UNDERSCORE }}.tar.gz -O boost.tar.gz
+          tar xzf boost.tar.gz
+
+      - name: Bootstrap b2
+        working-directory: ${{ env.BOOST_SRC_DIR }}
+        run: ./bootstrap.sh --with-toolset=clang --with-libraries=filesystem,system,regex,program_options
+
+      - name: Write user-config.jam for NDK cross-compile
+        working-directory: ${{ env.BOOST_SRC_DIR }}
+        run: |
+          cat > user-config.jam <<EOF
+          using clang : android
+            : $CXX
+            : <archiver>$AR <ranlib>$RANLIB
+              <cxxflags>"-fPIC -std=c++17"
+            ;
+          EOF
+
+      - name: Build Boost
+        working-directory: ${{ env.BOOST_SRC_DIR }}
+        run: |
+          ./b2 \
+            --user-config=user-config.jam \
+            toolset=clang-android \
+            target-os=android \
+            architecture=${{ matrix.boost_arch }} \
+            address-model=${{ matrix.boost_address_model }} \
+            variant=release \
+            link=static \
+            runtime-link=static \
+            threading=multi \
+            --with-filesystem \
+            --with-system \
+            --with-regex \
+            --with-program_options \
+            --prefix=/tmp/boost-install-${{ matrix.abi }} \
+            -j$(nproc) \
+            install
+
+      - name: Package artifact
+        run: |
+          cd /tmp/boost-install-${{ matrix.abi }}
+          tar czf boost-${{ env.BOOST_VERSION }}-android-${{ matrix.abi }}.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: boost-android-${{ matrix.abi }}
+          path: /tmp/boost-install-${{ matrix.abi }}/boost-${{ env.BOOST_VERSION }}-android-${{ matrix.abi }}.tar.gz
