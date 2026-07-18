@@ -25,11 +25,11 @@ jobs:
             gmp_host: x86_64-linux-android
 
     steps:
-      - name: Set up Android NDK r30
+      - name: Set up Android NDK r30 (30.0.15729638 rc2)
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r30
+          ndk-version: r30-beta2
           add-to-path: true
 
       - name: Download GMP source
