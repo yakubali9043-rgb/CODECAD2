@@ -1,0 +1,164 @@
+name: Build double-conversion, FreeType, LibXml2, LibZip for Android
+
+on:
+  workflow_dispatch:
+
+env:
+  API_LEVEL: 24
+  NDK_URL: https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip
+  NDK_DIR: /opt/android-ndk
+  DC_VERSION: 3.3.0
+  FREETYPE_VERSION: 2.13.3
+  LIBXML2_VERSION: 2.13.5
+  LIBXML2_VERSION_DIR: 2.13
+  LIBZIP_VERSION: 1.11.2
+
+jobs:
+  build-libs:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+
+    steps:
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: ndk-r30-beta2-linux
+
+      - name: Download NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q "${{ env.NDK_URL }}" -O ndk.zip
+          unzip -q ndk.zip -d /opt/
+          mv /opt/android-ndk-r30-beta2 /opt/android-ndk
+
+      - name: Install cmake/ninja
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Cache source archives
+        id: source-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dc.tar.gz
+            freetype.tar.xz
+            libxml2.tar.xz
+            libzip.tar.xz
+          key: source-archives-${{ env.DC_VERSION }}-${{ env.FREETYPE_VERSION }}-${{ env.LIBXML2_VERSION }}-${{ env.LIBZIP_VERSION }}
+
+      - name: Set common CMake args
+        run: |
+          echo "TOOLCHAIN_FILE=${{ env.NDK_DIR }}/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+          echo "INSTALL_PREFIX=/tmp/install-${{ matrix.abi }}" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=android-${{ env.API_LEVEL }}" >> $GITHUB_ENV
+
+      # ---------- double-conversion ----------
+      - name: Build double-conversion
+        run: |
+          rm -rf build-dc double-conversion-${{ env.DC_VERSION }}
+          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f dc.tar.gz ]; then
+            wget -q https://github.com/google/double-conversion/archive/refs/tags/v${{ env.DC_VERSION }}.tar.gz -O dc.tar.gz
+          fi
+          tar xzf dc.tar.gz
+          cmake -S double-conversion-${{ env.DC_VERSION }} -B build-dc -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF
+          cmake --build build-dc -j$(nproc)
+          cmake --install build-dc
+
+      # ---------- FreeType ----------
+      - name: Build FreeType
+        run: |
+          rm -rf build-ft freetype-${{ env.FREETYPE_VERSION }}
+          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f freetype-${{ env.FREETYPE_VERSION }}.tar.xz ]; then
+            wget -q https://download.savannah.gnu.org/releases/freetype/freetype-${{ env.FREETYPE_VERSION }}.tar.xz
+          fi
+          tar xf freetype-${{ env.FREETYPE_VERSION }}.tar.xz
+          cmake -S freetype-${{ env.FREETYPE_VERSION }} -B build-ft -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DFT_DISABLE_HARFBUZZ=TRUE \
+            -DFT_DISABLE_PNG=TRUE \
+            -DFT_DISABLE_BZIP2=TRUE \
+            -DFT_DISABLE_BROTLI=TRUE
+          cmake --build build-ft -j$(nproc)
+          cmake --install build-ft
+
+      # ---------- LibXml2 ----------
+      - name: Build LibXml2
+        run: |
+          rm -rf build-xml2 libxml2-${{ env.LIBXML2_VERSION }}
+          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f libxml2-${{ env.LIBXML2_VERSION }}.tar.xz ]; then
+            wget -q https://download.gnome.org/sources/libxml2/${{ env.LIBXML2_VERSION_DIR }}/libxml2-${{ env.LIBXML2_VERSION }}.tar.xz
+          fi
+          tar xf libxml2-${{ env.LIBXML2_VERSION }}.tar.xz
+          cmake -S libxml2-${{ env.LIBXML2_VERSION }} -B build-xml2 -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF \
+            -DLIBXML2_WITH_ICONV=OFF \
+            -DLIBXML2_WITH_LZMA=OFF \
+            -DLIBXML2_WITH_ICU=OFF \
+            -DLIBXML2_WITH_TESTS=OFF
+          cmake --build build-xml2 -j$(nproc)
+          cmake --install build-xml2
+
+      # ---------- LibZip ----------
+      - name: Build LibZip
+        run: |
+          rm -rf build-zip libzip-${{ env.LIBZIP_VERSION }}
+          if [ "${{ steps.source-cache.outputs.cache-hit }}" != 'true' ] || [ ! -f libzip-${{ env.LIBZIP_VERSION }}.tar.xz ]; then
+            wget -q https://libzip.org/download/libzip-${{ env.LIBZIP_VERSION }}.tar.xz
+          fi
+          tar xf libzip-${{ env.LIBZIP_VERSION }}.tar.xz
+          cmake -S libzip-${{ env.LIBZIP_VERSION }} -B build-zip -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_COMMONCRYPTO=OFF \
+            -DENABLE_GNUTLS=OFF \
+            -DENABLE_MBEDTLS=OFF \
+            -DENABLE_OPENSSL=OFF \
+            -DENABLE_BZIP2=OFF \
+            -DBUILD_TOOLS=OFF \
+            -DBUILD_REGRESS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_DOC=OFF
+          cmake --build build-zip -j$(nproc)
+          cmake --install build-zip
+
+      - name: Sanity check outputs
+        run: |
+          echo "Installed libs:"
+          find $INSTALL_PREFIX/lib -name "*.a"
+
+      - name: Package artifact
+        run: |
+          cd $INSTALL_PREFIX
+          tar czf android-libs-${{ matrix.abi }}.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-libs-${{ matrix.abi }}
+          path: /tmp/install-${{ matrix.abi }}/android-libs-${{ matrix.abi }}.tar.gz
