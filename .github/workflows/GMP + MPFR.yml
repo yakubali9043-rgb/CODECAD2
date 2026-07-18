@@ -1,0 +1,107 @@
+name: Build GMP + MPFR for Android NDK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-gmp-mpfr-android.yml'
+
+env:
+  GMP_VERSION: 6.3.0
+  MPFR_VERSION: 4.2.1
+  API_LEVEL: 24
+  NDK_URL: https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip
+
+jobs:
+  build-gmp-mpfr-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            gmp_host: aarch64-linux-android
+            clang_triple: aarch64-linux-android
+          - abi: armeabi-v7a
+            gmp_host: arm-linux-androideabi
+            clang_triple: armv7a-linux-androideabi
+          - abi: x86_64
+            gmp_host: x86_64-linux-android
+            clang_triple: x86_64-linux-android
+
+    steps:
+      - name: Cache NDK download
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: ndk-r30-beta2-linux
+
+      - name: Download and extract NDK r30-beta2
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q "${{ env.NDK_URL }}" -O ndk.zip
+          unzip -q ndk.zip -d /opt/
+          mv /opt/android-ndk-r30-beta2 /opt/android-ndk
+
+      - name: Export toolchain env vars
+        run: |
+          TOOLCHAIN=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+          echo "CC=$TOOLCHAIN/bin/${{ matrix.clang_triple }}${{ env.API_LEVEL }}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/${{ matrix.clang_triple }}${{ env.API_LEVEL }}-clang++" >> $GITHUB_ENV
+
+      - name: Sanity check clang wrapper exists
+        run: |
+          ls "$TOOLCHAIN/bin" | grep "${{ matrix.clang_triple }}${{ env.API_LEVEL }}-clang" || \
+            (echo "::error::Expected clang wrapper not found — check API_LEVEL / triple naming for r30-beta2" && exit 1)
+
+      # ---------- GMP ----------
+      - name: Download GMP source
+        run: |
+          wget -q https://gmplib.org/download/gmp/gmp-${{ env.GMP_VERSION }}.tar.xz
+          tar xf gmp-${{ env.GMP_VERSION }}.tar.xz
+
+      - name: Build GMP
+        working-directory: gmp-${{ env.GMP_VERSION }}
+        run: |
+          ./configure \
+            --host=${{ matrix.gmp_host }} \
+            --prefix=/tmp/install-${{ matrix.abi }} \
+            --enable-static \
+            --disable-shared \
+            --disable-assembly
+          make -j$(nproc)
+          make install
+
+      # ---------- MPFR ----------
+      - name: Download MPFR source
+        run: |
+          wget -q https://www.mpfr.org/mpfr-current/mpfr-${{ env.MPFR_VERSION }}.tar.xz
+          tar xf mpfr-${{ env.MPFR_VERSION }}.tar.xz
+
+      - name: Build MPFR (against the GMP we just built)
+        working-directory: mpfr-${{ env.MPFR_VERSION }}
+        run: |
+          ./configure \
+            --host=${{ matrix.gmp_host }} \
+            --prefix=/tmp/install-${{ matrix.abi }} \
+            --with-gmp=/tmp/install-${{ matrix.abi }} \
+            --enable-static \
+            --disable-shared
+          make -j$(nproc)
+          make install
+
+      - name: Package artifact
+        run: |
+          cd /tmp/install-${{ matrix.abi }}
+          tar czf gmp-mpfr-${{ matrix.abi }}.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmp-mpfr-android-${{ matrix.abi }}
+          path: /tmp/install-${{ matrix.abi }}/gmp-mpfr-${{ matrix.abi }}.tar.gz
