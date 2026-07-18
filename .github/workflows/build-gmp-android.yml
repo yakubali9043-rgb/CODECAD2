@@ -1,0 +1,81 @@
+name: Build GMP for Android NDK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-gmp-android.yml'
+
+env:
+  GMP_VERSION: 6.3.0
+  API_LEVEL: 24   # <-- minimum API level (supports 24 and above, including 36+)
+
+jobs:
+  build-gmp-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            gmp_host: aarch64-linux-android
+          - abi: armeabi-v7a
+            gmp_host: arm-linux-androideabi
+          - abi: x86_64
+            gmp_host: x86_64-linux-android
+
+    steps:
+      - name: Set up Android NDK r30
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r30
+          add-to-path: true
+
+      - name: Download GMP source
+        run: |
+          wget -q https://gmplib.org/download/gmp/gmp-${{ env.GMP_VERSION }}.tar.xz
+          tar xf gmp-${{ env.GMP_VERSION }}.tar.xz
+
+      - name: Configure and build
+        working-directory: gmp-${{ env.GMP_VERSION }}
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+
+          # NDK clang wrapper naming: <triplet><api>-clang
+          case "${{ matrix.abi }}" in
+            arm64-v8a)   CLANG_TRIPLE=aarch64-linux-android ;;
+            armeabi-v7a) CLANG_TRIPLE=armv7a-linux-androideabi ;;
+            x86_64)      CLANG_TRIPLE=x86_64-linux-android ;;
+          esac
+
+          export CC=$TOOLCHAIN/bin/${CLANG_TRIPLE}${{ env.API_LEVEL }}-clang
+          export CXX=$TOOLCHAIN/bin/${CLANG_TRIPLE}${{ env.API_LEVEL }}-clang++
+
+          ls $TOOLCHAIN/bin | grep clang   # sanity check the wrapper actually exists before configure
+
+          ./configure \
+            --host=${{ matrix.gmp_host }} \
+            --prefix=/tmp/gmp-install-${{ matrix.abi }} \
+            --enable-static \
+            --disable-shared \
+            --disable-assembly
+
+          make -j$(nproc)
+          make install
+
+      - name: Package artifact
+        run: |
+          cd /tmp/gmp-install-${{ matrix.abi }}
+          tar czf gmp-${{ env.GMP_VERSION }}-android-${{ matrix.abi }}.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmp-android-${{ matrix.abi }}
+          path: /tmp/gmp-install-${{ matrix.abi }}/gmp-${{ env.GMP_VERSION }}-android-${{ matrix.abi }}.tar.gz
