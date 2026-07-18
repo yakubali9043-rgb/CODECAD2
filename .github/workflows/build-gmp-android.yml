@@ -35,7 +35,7 @@ jobs:
 
       - name: Download GMP source
         run: |
-          wget -q https://gmplib.org/download/gmp/gmp-${{ env.GMP_VERSION }}.tar.xz
+          wget -q https://raw.githubusercontent.com/yakubali9043-rgb/CODECAD2/refs/heads/main/gmp-${{ env.GMP_VERSION }}.tar.xz
           tar xf gmp-${{ env.GMP_VERSION }}.tar.xz
 
       - name: Download MPFR source
