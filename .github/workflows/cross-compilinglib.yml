@@ -133,7 +133,8 @@ jobs:
             --prefix=$INSTALL_PREFIX --libdir=lib \
             --default-library=static \
             -Dfontconfig=disabled -Dfreetype=enabled -Dzlib=enabled \
-            -Dxlib=disabled -Dxcb=disabled -Dtests=disabled -Dpng=disabled
+            -Dxlib=disabled -Dxcb=disabled -Dps=disabled -Dpdf=disabled -Dsvg=disabled -Dscript=disabled \
+            -Dtests=disabled -Dpng=disabled
           meson compile -C build-cairo
           meson install -C build-cairo
 
